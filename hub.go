@@ -155,7 +155,7 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
 			h.clients[conn] = append(h.clients[conn], channelConn.GetChannel())
 
 			channelConn.SendJSON("joined", StatusPayload{Status: "success"})
-		} else if h.isClientInTopic(channelConn, channelConn.GetChannel()``) {
+		} else if h.isClientInTopic(channelConn, channelConn.GetChannel()) {
 			topic.Receive(channelConn, msg.Event, msg.Payload)
 		} else {
 			channelConn.SendJSON("not_joined", StatusPayload{Status: "error", Error: "topic not joined"})
