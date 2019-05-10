@@ -3,6 +3,7 @@ package hub
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -28,7 +29,7 @@ var upgrader = websocket.Upgrader{
 
 type CoreMessage struct {
 	Topic   string      `json:"topic"`
-	Channel string      `json:"channel"`
+	Room    string      `json:"room"`
 	Event   string      `json:"event"`
 	Payload interface{} `json:"payload"`
 }
@@ -39,9 +40,9 @@ type StatusPayload struct {
 }
 
 type TopicHandler interface {
-	Join(conn *websocket.Conn) error
-	Receive(conn *websocket.Conn, event string, payload interface{})
-	Unjoin(conn *websocket.Conn)
+	Join(conn *websocket.Conn, channel string, msg interface{}) error
+	Receive(conn *websocket.Conn, channel, event string, msg interface{})
+	Unjoin(conn *websocket.Conn, channel string)
 }
 
 type Hub struct {
@@ -77,6 +78,7 @@ func (h *Hub) runPinger() {
 	}
 }
 
+// TODO determine if this is still needed at the hub level
 func (h Hub) startBroadcaster() {
 	for {
 		msg := <-h.broadcast
@@ -92,85 +94,88 @@ func (h Hub) startBroadcaster() {
 
 func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade the connection to a websocket
-	ws, err := upgrader.Upgrade(w, r, nil)
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer h.disconnect(ws)
+	defer h.disconnect(conn)
 
 	// Add to the list of clients
-	h.clients[ws] = []string{}
+	h.clients[conn] = []string{}
 
 	// Setup handlers and timeouts
-	ws.SetReadLimit(maxMessageSize)
-	ws.SetReadDeadline(time.Now().Add(pongWait))
-	ws.SetPongHandler(func(string) error {
-		ws.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetReadLimit(maxMessageSize)
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
-	// Enter main event loop
+	// Enter event loop
 	for {
 		// Read the message
 		var msg CoreMessage
-		err := ws.ReadJSON(&msg)
+		err := conn.ReadJSON(&msg)
 		if err != nil {
 			// Log errors if not expected message
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
 				log.Println("[ERR] error reading json:", err)
 				break
 			}
+
+			// Break if the error is an expected websocket error
+			if e, ok := err.(*websocket.CloseError); ok && e.Code == websocket.CloseGoingAway {
+				break
+			}
+
 			continue
 		}
+
+		resp := CoreMessage{Topic: msg.Topic, Room: msg.Room}
 
 		// Check that the topic for the message exists
-		if h.topicHandlers[msg.Topic] == nil {
-			ws.WriteJSON(CoreMessage{
-				Topic:   msg.Topic,
-				Channel: msg.Channel,
-				Event:   "not_found",
-				Payload: StatusPayload{Error: "topic not found"},
-			})
+		topic := h.topicHandlers[msg.Topic]
+		if topic == nil {
+			resp.Event = "not_found"
+			resp.Payload = StatusPayload{Status: "error", Error: "topic not found"}
+			conn.WriteJSON(resp)
 			continue
 		}
 
-		mergedChanTopic := msg.Topic + ":" + msg.Channel
+		channel := msg.Topic + ":" + msg.Room
 
 		if msg.Event == "join" {
-			// TODO: make sure the user is not already in the channel
-
-			if err := h.topicHandlers[msg.Topic].Join(ws); err != nil {
-				ws.WriteJSON(CoreMessage{
-					Topic:   msg.Topic,
-					Channel: msg.Channel,
-					Event:   "join_failed",
-					Payload: StatusPayload{Error: err.Error()},
-				})
+			// If the user is already joined dont rejoin
+			if h.isClientInTopic(conn, channel) {
+				resp.Event = "already_joined"
+				resp.Payload = StatusPayload{Status: "error", Error: "already joined topic"}
+				conn.WriteJSON(resp)
 				continue
 			}
 
-			h.clients[ws] = append(h.clients[ws], mergedChanTopic)
+			if err := topic.Join(conn, channel, msg.Payload); err != nil {
+				resp.Event = "join_failed"
+				resp.Payload = StatusPayload{Status: "error", Error: err.Error()}
+				conn.WriteJSON(resp)
+				continue
+			}
 
-			ws.WriteJSON(CoreMessage{
-				Topic:   msg.Topic,
-				Channel: msg.Channel,
-				Event:   "joined",
-				Payload: StatusPayload{Status: "success"},
-			})
-		} else if h.clientAllowedTopic(ws, mergedChanTopic) {
-			h.topicHandlers[msg.Topic].Receive(ws, msg.Event, msg.Payload)
+			h.clients[conn] = append(h.clients[conn], channel)
+
+			resp.Event = "joined"
+			resp.Payload = StatusPayload{Status: "success"}
+			conn.WriteJSON(resp)
+		} else if h.isClientInTopic(conn, channel) {
+			topic.Receive(conn, channel, msg.Event, msg.Payload)
 		} else {
-			ws.WriteJSON(CoreMessage{
-				Topic:   msg.Topic,
-				Channel: msg.Channel,
-				Event:   "not_joined",
-				Payload: StatusPayload{Error: "topic not joined"},
-			})
+			resp.Event = "not_joined"
+			resp.Payload = StatusPayload{Status: "error", Error: "topic not joined"}
+			conn.WriteJSON(resp)
 		}
 	}
 }
 
-func (h Hub) clientAllowedTopic(conn *websocket.Conn, checkTopic string) bool {
+func (h Hub) isClientInTopic(conn *websocket.Conn, checkTopic string) bool {
 	for _, topicName := range h.clients[conn] {
 		if checkTopic == topicName {
 			return true
@@ -180,13 +185,14 @@ func (h Hub) clientAllowedTopic(conn *websocket.Conn, checkTopic string) bool {
 	return false
 }
 
-func (h *Hub) disconnect(ws *websocket.Conn) {
+func (h *Hub) disconnect(conn *websocket.Conn) {
 	log.Println("disconnecting client...")
-	for _, topic := range h.clients[ws] {
-		h.topicHandlers[topic].Unjoin(ws)
+	for _, channel := range h.clients[conn] {
+		topic := strings.Split(channel, ":")[0]
+		h.topicHandlers[topic].Unjoin(conn, channel)
 	}
 
-	ws.Close()
+	conn.Close()
 
-	delete(h.clients, ws)
+	delete(h.clients, conn)
 }
