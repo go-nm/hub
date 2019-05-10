@@ -40,9 +40,9 @@ type StatusPayload struct {
 }
 
 type TopicHandler interface {
-	Join(conn *websocket.Conn, channel string, msg interface{}) error
-	Receive(conn *websocket.Conn, channel, event string, msg interface{})
-	Unjoin(conn *websocket.Conn, channel string)
+	Join(conn Conn, msg interface{}) error
+	Receive(conn Conn, event string, msg interface{})
+	Unjoin(conn Conn)
 }
 
 type Hub struct {
@@ -131,52 +131,40 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		resp := CoreMessage{Topic: msg.Topic, Room: msg.Room}
+		channelConn := Conn{WSConn: conn, Topic: msg.Topic, Room: msg.Room}
 
 		// Check that the topic for the message exists
 		topic := h.topicHandlers[msg.Topic]
 		if topic == nil {
-			resp.Event = "not_found"
-			resp.Payload = StatusPayload{Status: "error", Error: "topic not found"}
-			conn.WriteJSON(resp)
+			channelConn.SendJSON("not_found", StatusPayload{Status: "error", Error: "topic not found"})
 			continue
 		}
 
-		channel := msg.Topic + ":" + msg.Room
-
 		if msg.Event == "join" {
 			// If the user is already joined dont rejoin
-			if h.isClientInTopic(conn, channel) {
-				resp.Event = "already_joined"
-				resp.Payload = StatusPayload{Status: "error", Error: "already joined topic"}
-				conn.WriteJSON(resp)
+			if h.isClientInTopic(channelConn, channelConn.GetChannel()) {
+				channelConn.SendJSON("already_joined", StatusPayload{Status: "error", Error: "already joined topic"})
 				continue
 			}
 
-			if err := topic.Join(conn, channel, msg.Payload); err != nil {
-				resp.Event = "join_failed"
-				resp.Payload = StatusPayload{Status: "error", Error: err.Error()}
-				conn.WriteJSON(resp)
+			if err := topic.Join(channelConn, msg.Payload); err != nil {
+				channelConn.SendJSON("join_failed", StatusPayload{Status: "error", Error: err.Error()})
 				continue
 			}
 
-			h.clients[conn] = append(h.clients[conn], channel)
+			h.clients[conn] = append(h.clients[conn], channelConn.GetChannel())
 
-			resp.Event = "joined"
-			resp.Payload = StatusPayload{Status: "success"}
-			conn.WriteJSON(resp)
-		} else if h.isClientInTopic(conn, channel) {
-			topic.Receive(conn, channel, msg.Event, msg.Payload)
+			channelConn.SendJSON("joined", StatusPayload{Status: "success"})
+		} else if h.isClientInTopic(channelConn, channelConn.GetChannel()``) {
+			topic.Receive(channelConn, msg.Event, msg.Payload)
 		} else {
-			resp.Event = "not_joined"
-			resp.Payload = StatusPayload{Status: "error", Error: "topic not joined"}
-			conn.WriteJSON(resp)
+			channelConn.SendJSON("not_joined", StatusPayload{Status: "error", Error: "topic not joined"})
 		}
 	}
 }
 
-func (h Hub) isClientInTopic(conn *websocket.Conn, checkTopic string) bool {
-	for _, topicName := range h.clients[conn] {
+func (h Hub) isClientInTopic(conn Conn, checkTopic string) bool {
+	for _, topicName := range h.clients[conn.WSConn] {
 		if checkTopic == topicName {
 			return true
 		}
@@ -188,8 +176,11 @@ func (h Hub) isClientInTopic(conn *websocket.Conn, checkTopic string) bool {
 func (h *Hub) disconnect(conn *websocket.Conn) {
 	log.Println("disconnecting client...")
 	for _, channel := range h.clients[conn] {
-		topic := strings.Split(channel, ":")[0]
-		h.topicHandlers[topic].Unjoin(conn, channel)
+		splitChannel := strings.Split(channel, ":")
+
+		channelConn := Conn{WSConn: conn, Topic: splitChannel[0], Room: splitChannel[1]}
+
+		h.topicHandlers[splitChannel[0]].Unjoin(channelConn)
 	}
 
 	conn.Close()
