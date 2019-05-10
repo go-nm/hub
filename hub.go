@@ -9,18 +9,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const (
-	// Time allowed to write a message to the peer.
-	writeWait = 10 * time.Second
-
+var (
 	// Time allowed to read the next pong message from the peer.
-	pongWait = 60 * time.Second
+	defaultPongWait = 60 * time.Second
 
 	// Send pings to peer with this period. Must be less than pongWait.
-	pingPeriod = (pongWait * 9) / 10
+	defaultPingPeriod = (defaultPongWait * 9) / 10
 
 	// Maximum message size allowed from peer.
-	maxMessageSize = 512
+	defaultMaxMessageSize = 512
 )
 
 var upgrader = websocket.Upgrader{
@@ -47,16 +44,38 @@ type TopicHandler interface {
 	Unjoin(conn Conn)
 }
 
+// Opts is the struct for options passed into the hub
+type Opts struct {
+	PongWait       *time.Duration
+	PingPeriod     *time.Duration
+	MaxMessageSize int64
+}
+
 // Hub is the struct for the main Hub
 type Hub struct {
+	opts Opts
+
 	topicHandlers map[string]TopicHandler
 
 	clients map[*websocket.Conn][]string
 }
 
 // New creates a new hub and starts the ping service to keep connections alive
-func New() (h *Hub) {
+func New(opts *Opts) (h *Hub) {
+	if opts == nil {
+		opts = &Opts{}
+	}
+	if opts.PongWait == nil {
+		opts.PongWait = &defaultPongWait
+	}
+	if opts.PingPeriod == nil {
+		opts.PingPeriod = &defaultPingPeriod
+	}
+	if opts.MaxMessageSize == 0 {
+		opts.MaxMessageSize = int64(defaultMaxMessageSize)
+	}
 	h = &Hub{
+		opts:          *opts,
 		clients:       make(map[*websocket.Conn][]string),
 		topicHandlers: make(map[string]TopicHandler),
 	}
@@ -76,7 +95,7 @@ func (h *Hub) runPinger() {
 		for conn := range h.clients {
 			conn.WriteMessage(websocket.PingMessage, []byte{})
 		}
-		time.Sleep(pingPeriod)
+		time.Sleep(*h.opts.PingPeriod)
 	}
 }
 
@@ -93,10 +112,10 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
 	h.clients[conn] = []string{}
 
 	// Setup handlers and timeouts
-	conn.SetReadLimit(maxMessageSize)
-	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetReadLimit(h.opts.MaxMessageSize)
+	conn.SetReadDeadline(time.Now().Add(*h.opts.PongWait))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(pongWait))
+		conn.SetReadDeadline(time.Now().Add(*h.opts.PongWait))
 		return nil
 	})
 
