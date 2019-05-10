@@ -155,6 +155,7 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			// If the topic handler returns an error dont join
 			if err := topic.Join(channelConn, msg.Payload); err != nil {
 				channelConn.SendJSON("join_failed", statusPayload{Status: "error", Error: err.Error()})
 				continue
@@ -163,6 +164,13 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
 			h.clients[conn] = append(h.clients[conn], channelConn.GetChannel())
 
 			channelConn.SendJSON("joined", statusPayload{Status: "success"})
+		} else if msg.Event == "leave" {
+			if h.isClientInTopic(channelConn, channelConn.GetChannel()) {
+				topic.Unjoin(channelConn)
+			}
+
+			// Respond with left message either way
+			channelConn.SendJSON("left", statusPayload{Status: "success"})
 		} else if h.isClientInTopic(channelConn, channelConn.GetChannel()) {
 			topic.Receive(channelConn, msg.Event, msg.Payload)
 		} else {

@@ -1,12 +1,12 @@
-let ws;
-let timeout = 1000;
-
 class Room {
   ws = null;
   isJoined = false;
   topic = '';
   room = '';
   eventHandlers = {};
+
+  static AlreadyJoinedError = new Error('Already Joined');
+  static NotJoinedError = new Error('Not Joined');
 
   constructor(ws, fullName) {
     this.ws = ws;
@@ -18,7 +18,7 @@ class Room {
 
   join() {
     if (this.isJoined) {
-      return false;
+      throw Room.AlreadyJoinedError;
     }
 
     this.ws.send(JSON.stringify({
@@ -29,12 +29,25 @@ class Room {
   }
 
   send(event, payload) {
+    if (!this.isJoined) {
+      throw Room.NotJoinedError;
+    }
+
     this.ws.send(JSON.stringify({
       event,
       payload,
       topic: this.topic,
       room: this.room,
-    }))
+    }));
+  }
+
+  leave(payload) {
+    this.ws.send(JSON.stringify({
+      payload,
+      topic: this.topic,
+      room: this.room,
+      event: 'leave',
+    }));
   }
 
   onEvent(event, handler) {
@@ -46,6 +59,20 @@ class Room {
   }
 
   messageReceived(event, payload) {
+    // Handle system generated messages
+    switch (event) {
+      case 'joined':
+        this.isJoined = true;
+        break;
+
+      case 'left':
+        this.isJoined = false;
+        break;
+
+      default:
+        break;
+    }
+
     if (this.eventHandlers[event]) {
       this.eventHandlers[event].forEach(h => h(event, payload));
     } else {
