@@ -28,6 +28,15 @@ class Room {
     }));
   }
 
+  send(event, payload) {
+    this.ws.send(JSON.stringify({
+      event,
+      payload,
+      topic: this.topic,
+      room: this.room,
+    }))
+  }
+
   onEvent(event, handler) {
     if (!this.eventHandlers[event]) {
       this.eventHandlers[event] = [];
@@ -39,6 +48,8 @@ class Room {
   messageReceived(event, payload) {
     if (this.eventHandlers[event]) {
       this.eventHandlers[event].forEach(h => h(event, payload));
+    } else {
+      console.warn(`Event (${event}) not being watched`)
     }
   }
 }
