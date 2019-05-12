@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -36,12 +37,17 @@ type statusPayload struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// ConnValidHandler is a callback function for the pre-connect
+// validation step to allow users to specify a handler that allows or denys
+// the wescoket connection based on the request.
+type ConnValidHandler func(*http.Request) (interface{}, error)
+
 // TopicHandler is the interface that must be implemented to register
 // a new topic handler with the Hub for processing messages
 type TopicHandler interface {
-	Join(conn Conn, msg interface{}) error
-	Receive(conn Conn, event string, msg interface{})
-	Unjoin(conn Conn)
+	Join(conn ChanConn, msg interface{}) error
+	Receive(conn ChanConn, event string, msg interface{})
+	Unjoin(conn ChanConn)
 }
 
 // Opts is the struct for options passed into the hub
@@ -55,9 +61,10 @@ type Opts struct {
 type Hub struct {
 	opts Opts
 
+	connHandlers  []ConnValidHandler
 	topicHandlers map[string]TopicHandler
 
-	clients map[*websocket.Conn][]string
+	clients map[*websocket.Conn]*Conn
 }
 
 // New creates a new hub and starts the ping service to keep connections alive
@@ -76,13 +83,18 @@ func New(opts *Opts) (h *Hub) {
 	}
 	h = &Hub{
 		opts:          *opts,
-		clients:       make(map[*websocket.Conn][]string),
+		clients:       make(map[*websocket.Conn]*Conn),
 		topicHandlers: make(map[string]TopicHandler),
 	}
 
 	go h.runPinger()
 
 	return
+}
+
+// AddConnValidHandler registers a new connection validation handler
+func (h *Hub) AddConnValidHandler(handle ConnValidHandler) {
+	h.connHandlers = append(h.connHandlers, handle)
 }
 
 // AddTopicHandler registers a new TopicHandler with the topic name
@@ -101,21 +113,38 @@ func (h *Hub) runPinger() {
 
 // Handler is the HTTP handler for WebSocket connections to go to
 func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
+	conn := &Conn{}
+
+	for _, validator := range h.connHandlers {
+		data, err := validator(r)
+		if err != nil {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "validationFailed",
+				"error":  err,
+			})
+			return
+		}
+		conn.ConnData = append(conn.ConnData, data)
+	}
+
 	// Upgrade the connection to a websocket
-	conn, err := upgrader.Upgrade(w, r, nil)
+	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer h.disconnect(conn)
 
+	conn.WS = ws
+
 	// Add to the list of clients
-	h.clients[conn] = []string{}
+	h.clients[ws] = conn
 
 	// Setup handlers and timeouts
-	conn.SetReadLimit(h.opts.MaxMessageSize)
-	conn.SetReadDeadline(time.Now().Add(*h.opts.PongWait))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(*h.opts.PongWait))
+	ws.SetReadLimit(h.opts.MaxMessageSize)
+	ws.SetReadDeadline(time.Now().Add(*h.opts.PongWait))
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(*h.opts.PongWait))
 		return nil
 	})
 
@@ -123,7 +152,7 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
 	for {
 		// Read the message
 		var msg coreMessage
-		err := conn.ReadJSON(&msg)
+		err := ws.ReadJSON(&msg)
 		if err != nil {
 			// Log errors if not expected message
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
@@ -139,49 +168,49 @@ func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		channelConn := Conn{WSConn: conn, Topic: msg.Topic, Room: msg.Room}
+		chanConn := ChanConn{Conn: conn, Topic: msg.Topic, Room: msg.Room}
 
 		// Check that the topic for the message exists
 		topic := h.topicHandlers[msg.Topic]
 		if topic == nil {
-			channelConn.SendJSON("not_found", statusPayload{Status: "error", Error: "topic not found"})
+			chanConn.SendJSON("not_found", statusPayload{Status: "error", Error: "topic not found"})
 			continue
 		}
 
 		if msg.Event == "join" {
 			// If the user is already joined dont rejoin
-			if h.isClientInTopic(channelConn, channelConn.GetChannel()) {
-				channelConn.SendJSON("already_joined", statusPayload{Status: "error", Error: "already joined topic"})
+			if h.isConnInChan(conn, chanConn.GetChannel()) {
+				chanConn.SendJSON("already_joined", statusPayload{Status: "error", Error: "already joined topic"})
 				continue
 			}
 
 			// If the topic handler returns an error dont join
-			if err := topic.Join(channelConn, msg.Payload); err != nil {
-				channelConn.SendJSON("join_failed", statusPayload{Status: "error", Error: err.Error()})
+			if err := topic.Join(chanConn, msg.Payload); err != nil {
+				chanConn.SendJSON("join_failed", statusPayload{Status: "error", Error: err.Error()})
 				continue
 			}
 
-			h.clients[conn] = append(h.clients[conn], channelConn.GetChannel())
+			conn.Channels = append(conn.Channels, chanConn.GetChannel())
 
-			channelConn.SendJSON("joined", statusPayload{Status: "success"})
+			chanConn.SendJSON("joined", statusPayload{Status: "success"})
 		} else if msg.Event == "leave" {
-			if h.isClientInTopic(channelConn, channelConn.GetChannel()) {
-				topic.Unjoin(channelConn)
+			if h.isConnInChan(conn, chanConn.GetChannel()) {
+				topic.Unjoin(chanConn)
 			}
 
 			// Respond with left message either way
-			channelConn.SendJSON("left", statusPayload{Status: "success"})
-		} else if h.isClientInTopic(channelConn, channelConn.GetChannel()) {
-			topic.Receive(channelConn, msg.Event, msg.Payload)
+			chanConn.SendJSON("left", statusPayload{Status: "success"})
+		} else if h.isConnInChan(conn, chanConn.GetChannel()) {
+			topic.Receive(chanConn, msg.Event, msg.Payload)
 		} else {
-			channelConn.SendJSON("not_joined", statusPayload{Status: "error", Error: "topic not joined"})
+			chanConn.SendJSON("not_joined", statusPayload{Status: "error", Error: "topic not joined"})
 		}
 	}
 }
 
-func (h Hub) isClientInTopic(conn Conn, checkTopic string) bool {
-	for _, topicName := range h.clients[conn.WSConn] {
-		if checkTopic == topicName {
+func (h Hub) isConnInChan(conn *Conn, checkTopic string) bool {
+	for _, channelName := range conn.Channels {
+		if checkTopic == channelName {
 			return true
 		}
 	}
@@ -189,17 +218,17 @@ func (h Hub) isClientInTopic(conn Conn, checkTopic string) bool {
 	return false
 }
 
-func (h *Hub) disconnect(conn *websocket.Conn) {
+func (h *Hub) disconnect(conn *Conn) {
 	log.Println("disconnecting client...")
-	for _, channel := range h.clients[conn] {
+	for _, channel := range conn.Channels {
 		splitChannel := strings.Split(channel, ":")
 
-		channelConn := Conn{WSConn: conn, Topic: splitChannel[0], Room: splitChannel[1]}
+		channelConn := ChanConn{Conn: conn, Topic: splitChannel[0], Room: splitChannel[1]}
 
 		h.topicHandlers[splitChannel[0]].Unjoin(channelConn)
 	}
 
-	conn.Close()
+	conn.WS.Close()
 
-	delete(h.clients, conn)
+	delete(h.clients, conn.WS)
 }
