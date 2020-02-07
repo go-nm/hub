@@ -211,7 +211,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) disconnect(conn *Conn) {
 	log.Println("disconnecting client...")
-	for _, channel := range conn.Channels {
+	for channel := range conn.Channels {
 		splitChannel := strings.Split(channel, ":")
 
 		channelConn := ChanConn{Conn: conn, Topic: splitChannel[0], Room: splitChannel[1]}
