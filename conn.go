@@ -9,7 +9,7 @@ import (
 // Conn is the wrapped connection for a client
 type Conn struct {
 	WS       *websocket.Conn
-	Channels []string
+	Channels map[string]bool
 	ConnData []interface{}
 	mux      sync.Mutex
 }

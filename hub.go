@@ -179,7 +179,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if msg.Event == "join" {
 			// If the user is already joined dont rejoin
-			if h.isConnInChan(conn, chanConn.GetChannel()) {
+			if conn.Channels[chanConn.GetChannel()] == true {
 				chanConn.SendJSON("already_joined", statusPayload{Status: "error", Error: "already joined topic"})
 				continue
 			}
@@ -190,32 +190,23 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			conn.Channels = append(conn.Channels, chanConn.GetChannel())
+			conn.Channels[chanConn.GetChannel()] = true
 
 			chanConn.SendJSON("joined", statusPayload{Status: "success"})
 		} else if msg.Event == "leave" {
-			if h.isConnInChan(conn, chanConn.GetChannel()) {
+			if conn.Channels[chanConn.GetChannel()] == true {
 				topic.Unjoin(chanConn)
+				conn.Channels[chanConn.GetChannel()] = false
 			}
 
 			// Respond with left message either way
 			chanConn.SendJSON("left", statusPayload{Status: "success"})
-		} else if h.isConnInChan(conn, chanConn.GetChannel()) {
+		} else if conn.Channels[chanConn.GetChannel()] == true {
 			topic.Receive(chanConn, msg.Event, msg.Payload)
 		} else {
 			chanConn.SendJSON("not_joined", statusPayload{Status: "error", Error: "topic not joined"})
 		}
 	}
-}
-
-func (h Hub) isConnInChan(conn *Conn, checkTopic string) bool {
-	for _, channelName := range conn.Channels {
-		if checkTopic == channelName {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (h *Hub) disconnect(conn *Conn) {
