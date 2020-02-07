@@ -111,8 +111,8 @@ func (h *Hub) runPinger() {
 	}
 }
 
-// Handler is the HTTP handler for WebSocket connections to go to
-func (h *Hub) Handler(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP is the HTTP handler for WebSocket connections to go to
+func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn := &Conn{}
 
 	for _, validator := range h.connHandlers {
