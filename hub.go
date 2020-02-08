@@ -64,7 +64,7 @@ type Hub struct {
 	connHandlers  []ConnValidHandler
 	topicHandlers map[string]TopicHandler
 
-	clients map[*websocket.Conn]*Conn
+	clients map[*Conn]bool
 }
 
 // New creates a new hub and starts the ping service to keep connections alive
@@ -83,7 +83,7 @@ func New(opts *Opts) (h *Hub) {
 	}
 	h = &Hub{
 		opts:          *opts,
-		clients:       make(map[*websocket.Conn]*Conn),
+		clients:       make(map[*Conn]bool),
 		topicHandlers: make(map[string]TopicHandler),
 	}
 
@@ -141,7 +141,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn.WS = ws
 
 	// Add to the list of clients
-	h.clients[ws] = conn
+	h.clients[conn] = true
 
 	// Setup handlers and timeouts
 	ws.SetReadLimit(h.opts.MaxMessageSize)
@@ -224,5 +224,5 @@ func (h *Hub) disconnect(conn *Conn) {
 
 	conn.WS.Close()
 
-	delete(h.clients, conn.WS)
+	delete(h.clients, conn)
 }
