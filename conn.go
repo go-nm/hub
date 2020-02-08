@@ -10,7 +10,7 @@ import (
 type Conn struct {
 	WS       *websocket.Conn
 	Channels map[string]bool
-	ConnData []interface{}
+	InitData map[string]interface{}
 	mux      sync.Mutex
 }
 

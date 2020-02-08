@@ -61,7 +61,7 @@ type Opts struct {
 type Hub struct {
 	opts Opts
 
-	connHandlers  []ConnValidHandler
+	connHandlers  map[string]ConnValidHandler
 	topicHandlers map[string]TopicHandler
 
 	clients map[*websocket.Conn]*Conn
@@ -93,8 +93,8 @@ func New(opts *Opts) (h *Hub) {
 }
 
 // AddConnValidHandler registers a new connection validation handler
-func (h *Hub) AddConnValidHandler(handle ConnValidHandler) {
-	h.connHandlers = append(h.connHandlers, handle)
+func (h *Hub) AddConnValidHandler(name string, handle ConnValidHandler) {
+	h.connHandlers[name] = handle
 }
 
 // AddTopicHandler registers a new TopicHandler with the topic name
@@ -115,7 +115,7 @@ func (h *Hub) runPinger() {
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn := &Conn{Channels: make(map[string]bool)}
 
-	for _, validator := range h.connHandlers {
+	for key, validator := range h.connHandlers {
 		data, err := validator(r)
 		if err != nil {
 			w.WriteHeader(http.StatusForbidden)
@@ -125,7 +125,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		conn.ConnData = append(conn.ConnData, data)
+		conn.InitData[key] = data
 	}
 
 	// Upgrade the connection to a websocket
