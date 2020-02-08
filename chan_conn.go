@@ -13,8 +13,8 @@ type ChanConn struct {
 }
 
 // SendJSON sends a message to the client connection
-func (c ChanConn) SendJSON(event string, payload interface{}) {
-	c.Conn.SendJSON(c.Topic, c.Room, event, payload)
+func (c ChanConn) SendJSON(event string, payload interface{}) error {
+	return c.Conn.SendJSON(c.Topic, c.Room, event, payload)
 }
 
 // GetChannel gets the fully named channel in the form of "<topic>:<room>"

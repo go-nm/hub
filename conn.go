@@ -15,13 +15,15 @@ type Conn struct {
 }
 
 // SendJSON sends a message to the client connection
-func (c *Conn) SendJSON(topic, room, event string, payload interface{}) {
+func (c *Conn) SendJSON(topic, room, event string, payload interface{}) (err error) {
 	c.mux.Lock()
-	c.WS.WriteJSON(coreMessage{
+	err = c.WS.WriteJSON(coreMessage{
 		Topic:   topic,
 		Room:    room,
 		Event:   event,
 		Payload: payload,
 	})
 	c.mux.Unlock()
+
+	return
 }
