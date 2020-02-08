@@ -113,7 +113,10 @@ func (h *Hub) runPinger() {
 
 // ServeHTTP is the HTTP handler for WebSocket connections to go to
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn := &Conn{Channels: make(map[string]bool)}
+	conn := &Conn{
+		Channels: make(map[string]bool),
+		InitData: make(map[string]interface{}),
+	}
 
 	for key, validator := range h.connHandlers {
 		data, err := validator(r)
