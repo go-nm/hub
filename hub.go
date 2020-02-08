@@ -52,8 +52,8 @@ type TopicHandler interface {
 
 // Opts is the struct for options passed into the hub
 type Opts struct {
-	PongWait       *time.Duration
-	PingPeriod     *time.Duration
+	PongWait       time.Duration
+	PingPeriod     time.Duration
 	MaxMessageSize int64
 }
 
@@ -73,10 +73,10 @@ func New(opts *Opts) (h *Hub) {
 		opts = &Opts{}
 	}
 	if opts.PongWait == nil {
-		opts.PongWait = &defaultPongWait
+		opts.PongWait = defaultPongWait
 	}
 	if opts.PingPeriod == nil {
-		opts.PingPeriod = &defaultPingPeriod
+		opts.PingPeriod = defaultPingPeriod
 	}
 	if opts.MaxMessageSize == 0 {
 		opts.MaxMessageSize = int64(defaultMaxMessageSize)
@@ -145,9 +145,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Setup handlers and timeouts
 	ws.SetReadLimit(h.opts.MaxMessageSize)
-	ws.SetReadDeadline(time.Now().Add(*h.opts.PongWait))
+	ws.SetReadDeadline(time.Now().Add(h.opts.PongWait))
 	ws.SetPongHandler(func(string) error {
-		ws.SetReadDeadline(time.Now().Add(*h.opts.PongWait))
+		ws.SetReadDeadline(time.Now().Add(h.opts.PongWait))
 		return nil
 	})
 
