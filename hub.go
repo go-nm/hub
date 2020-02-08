@@ -85,6 +85,7 @@ func New(opts *Opts) (h *Hub) {
 		opts:          *opts,
 		clients:       make(map[*websocket.Conn]*Conn),
 		topicHandlers: make(map[string]TopicHandler),
+		connHandlers:  make(map[string]interface{}),
 	}
 
 	go h.runPinger()
