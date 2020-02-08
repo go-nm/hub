@@ -61,7 +61,7 @@ type Opts struct {
 type Hub struct {
 	opts Opts
 
-	connHandlers  map[string]ConnValidHandler
+	connHandlers  []ConnValidHandler
 	topicHandlers map[string]TopicHandler
 
 	clients map[*websocket.Conn]*Conn
