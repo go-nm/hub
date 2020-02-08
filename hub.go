@@ -47,7 +47,7 @@ type ConnValidHandler func(*http.Request) (interface{}, error)
 type TopicHandler interface {
 	Join(conn ChanConn, msg interface{}) error
 	Receive(conn ChanConn, event string, msg interface{})
-	Unjoin(conn ChanConn)
+	Leave(conn ChanConn)
 }
 
 // Opts is the struct for options passed into the hub
@@ -156,7 +156,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			// Log errors if not expected message
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
-				log.Println("[ERR] error reading json:", err)
+				log.Println("[ERR] unexpected close error:", err)
 				break
 			}
 
@@ -165,7 +165,8 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 
-			continue
+			log.Println("[ERR] error reading json:", err)
+			break
 		}
 
 		chanConn := ChanConn{Conn: conn, Topic: msg.Topic, Room: msg.Room}
@@ -195,7 +196,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			chanConn.SendJSON("joined", statusPayload{Status: "success"})
 		} else if msg.Event == "leave" {
 			if conn.Channels[chanConn.GetChannel()] == true {
-				topic.Unjoin(chanConn)
+				topic.Leave(chanConn)
 				conn.Channels[chanConn.GetChannel()] = false
 			}
 
@@ -210,13 +211,12 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) disconnect(conn *Conn) {
-	log.Println("disconnecting client...")
 	for channel := range conn.Channels {
 		splitChannel := strings.Split(channel, ":")
 
 		channelConn := ChanConn{Conn: conn, Topic: splitChannel[0], Room: splitChannel[1]}
 
-		h.topicHandlers[splitChannel[0]].Unjoin(channelConn)
+		h.topicHandlers[splitChannel[0]].Leave(channelConn)
 	}
 
 	conn.WS.Close()
