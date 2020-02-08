@@ -40,7 +40,7 @@ type statusPayload struct {
 // ConnValidHandler is a callback function for the pre-connect
 // validation step to allow users to specify a handler that allows or denys
 // the wescoket connection based on the request.
-type ConnValidHandler func(*http.Request) (interface{}, error)
+type ConnValidHandler func(*http.Request) (string, interface{}, error)
 
 // TopicHandler is the interface that must be implemented to register
 // a new topic handler with the Hub for processing messages
@@ -85,7 +85,6 @@ func New(opts *Opts) (h *Hub) {
 		opts:          *opts,
 		clients:       make(map[*websocket.Conn]*Conn),
 		topicHandlers: make(map[string]TopicHandler),
-		connHandlers:  make(map[string]ConnValidHandler),
 	}
 
 	go h.runPinger()
@@ -94,8 +93,8 @@ func New(opts *Opts) (h *Hub) {
 }
 
 // AddConnValidHandler registers a new connection validation handler
-func (h *Hub) AddConnValidHandler(name string, handle ConnValidHandler) {
-	h.connHandlers[name] = handle
+func (h *Hub) AddConnValidHandler(handle ConnValidHandler) {
+	h.connHandlers = append(h.connHandlers, handle)
 }
 
 // AddTopicHandler registers a new TopicHandler with the topic name
@@ -119,8 +118,8 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		InitData: make(map[string]interface{}),
 	}
 
-	for key, validator := range h.connHandlers {
-		data, err := validator(r)
+	for _, validator := range h.connHandlers {
+		name, data, err := validator(r)
 		if err != nil {
 			w.WriteHeader(http.StatusForbidden)
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -129,7 +128,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		conn.InitData[key] = data
+		conn.InitData[name] = data
 	}
 
 	// Upgrade the connection to a websocket
